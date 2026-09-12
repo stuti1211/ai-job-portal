@@ -1,0 +1,38 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Northstar Job Portal API",
+    "version": "1.0.0",
+    "description": "REST API for authentication, job discovery, applications, dashboards, and permitted job aggregation."
+  },
+  "servers": [{ "url": "http://localhost:4000" }],
+  "tags": [
+    { "name": "Health" },
+    { "name": "Auth" },
+    { "name": "Jobs" },
+    { "name": "Applications" },
+    { "name": "Dashboard" },
+    { "name": "Scraping" }
+  ],
+  "components": {
+    "securitySchemes": { "bearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "JWT" } },
+    "schemas": {
+      "Job": { "type": "object", "required": ["title", "location", "workMode", "employmentType", "description"], "properties": { "id": { "type": "string" }, "title": { "type": "string" }, "location": { "type": "string" }, "workMode": { "type": "string", "enum": ["REMOTE", "HYBRID", "ONSITE"] }, "employmentType": { "type": "string", "enum": ["FULL_TIME", "PART_TIME", "CONTRACT", "INTERNSHIP", "FREELANCE"] }, "skills": { "type": "array", "items": { "type": "string" } }, "description": { "type": "string" }, "status": { "type": "string", "enum": ["OPEN", "CLOSED"] } } },
+      "ApplicationStatus": { "type": "string", "enum": ["APPLIED", "REVIEWING", "SHORTLISTED", "REJECTED", "HIRED"] }
+    }
+  },
+  "paths": {
+    "/health": { "get": { "tags": ["Health"], "responses": { "200": { "description": "API is healthy" } } } },
+    "/auth/register": { "post": { "tags": ["Auth"], "summary": "Register a candidate or employer", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name", "email", "password"], "properties": { "name": { "type": "string" }, "email": { "type": "string", "format": "email" }, "password": { "type": "string", "minLength": 8 }, "role": { "type": "string", "enum": ["CANDIDATE", "EMPLOYER"] }, "companyName": { "type": "string" } } } } } }, "responses": { "201": { "description": "Registered and authenticated" }, "400": { "description": "Invalid input" }, "409": { "description": "Email already exists" } } } },
+    "/auth/login": { "post": { "tags": ["Auth"], "summary": "Log in", "responses": { "200": { "description": "Authenticated user and JWT" }, "401": { "description": "Invalid credentials" } } } },
+    "/jobs": { "get": { "tags": ["Jobs"], "summary": "Search open jobs", "parameters": [{ "name": "search", "in": "query", "schema": { "type": "string" } }, { "name": "location", "in": "query", "schema": { "type": "string" } }, { "name": "workMode", "in": "query", "schema": { "type": "string" } }, { "name": "employmentType", "in": "query", "schema": { "type": "string" } }, { "name": "page", "in": "query", "schema": { "type": "integer", "minimum": 1 } }, { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100 } }], "responses": { "200": { "description": "Paginated jobs" } } }, "post": { "tags": ["Jobs"], "security": [{ "bearerAuth": [] }], "summary": "Create a job", "responses": { "201": { "description": "Created" }, "403": { "description": "Employer or admin required" } } } },
+    "/jobs/{id}": { "get": { "tags": ["Jobs"], "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }], "responses": { "200": { "description": "Job details" }, "404": { "description": "Not found" } } }, "put": { "tags": ["Jobs"], "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Updated" } } }, "delete": { "tags": ["Jobs"], "security": [{ "bearerAuth": [] }], "responses": { "204": { "description": "Deleted" } } } },
+    "/jobs/{id}/apply": { "post": { "tags": ["Applications"], "security": [{ "bearerAuth": [] }], "summary": "Apply to a job", "responses": { "201": { "description": "Application created" }, "409": { "description": "Already applied" } } } },
+    "/jobs/{id}/save": { "post": { "tags": ["Jobs"], "security": [{ "bearerAuth": [] }], "summary": "Save a job", "responses": { "201": { "description": "Saved" } } } },
+    "/employer/jobs": { "get": { "tags": ["Jobs"], "security": [{ "bearerAuth": [] }], "summary": "List employer jobs", "responses": { "200": { "description": "Jobs with applicant counts" } } } },
+    "/applications": { "get": { "tags": ["Applications"], "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Applications visible to the current user" } } } },
+    "/applications/{id}/status": { "put": { "tags": ["Applications"], "security": [{ "bearerAuth": [] }], "summary": "Update application status", "responses": { "200": { "description": "Updated application" }, "400": { "description": "Invalid status" } } } },
+    "/dashboard": { "get": { "tags": ["Dashboard"], "security": [{ "bearerAuth": [] }], "summary": "Role-aware dashboard metrics", "responses": { "200": { "description": "Dashboard metrics" } } } },
+    "/scrape/jobs": { "post": { "tags": ["Scraping"], "security": [{ "bearerAuth": [] }], "summary": "Import jobs from Remotive or a normalized payload", "responses": { "200": { "description": "Import summary" }, "400": { "description": "Invalid scrape request" } } } }
+  }
+}

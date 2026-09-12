@@ -1,0 +1,26 @@
+# Dependencies
+**/node_modules/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Build output
+**/dist/
+**/build/
+
+# Generated Prisma client
+backend/generated/prisma/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Local tooling
+.vscode/
+
+# Local agent and editor tooling
+.agents/
+.claude/
+.windsurf/

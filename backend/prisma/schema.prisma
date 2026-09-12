@@ -1,0 +1,142 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  ADMIN
+  EMPLOYER
+  CANDIDATE
+}
+
+enum WorkMode {
+  REMOTE
+  HYBRID
+  ONSITE
+}
+
+enum EmploymentType {
+  FULL_TIME
+  PART_TIME
+  CONTRACT
+  INTERNSHIP
+  FREELANCE
+}
+
+enum JobStatus {
+  OPEN
+  CLOSED
+}
+
+enum ApplicationStatus {
+  APPLIED
+  REVIEWING
+  SHORTLISTED
+  REJECTED
+  HIRED
+}
+
+model User {
+  id           String        @id @default(cuid())
+  name         String
+  email        String        @unique
+  passwordHash String
+  role         UserRole      @default(CANDIDATE)
+  company      Company?
+  jobs         Job[]
+  applications Application[]
+  savedJobs    SavedJob[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@index([role])
+}
+
+model Company {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  website     String?
+  location    String?
+  logoUrl     String?
+  ownerId     String?  @unique
+  sourceKey   String?  @unique
+  owner       User?    @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  jobs        Job[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([name])
+  @@index([location])
+}
+
+model Job {
+  id             String         @id @default(cuid())
+  title          String
+  location       String
+  workMode       WorkMode
+  employmentType EmploymentType
+  salaryMin      Int?
+  salaryMax      Int?
+  experience     String?
+  skills         String[]
+  description    String
+  benefits       String[]
+  deadline       DateTime?
+  status         JobStatus      @default(OPEN)
+  source         String?
+  sourceUrl      String?
+  postedDate     DateTime       @default(now())
+  scrapedAt      DateTime?
+  companyId      String
+  employerId     String?
+  company        Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employer       User?          @relation(fields: [employerId], references: [id], onDelete: SetNull)
+  applications   Application[]
+  savedBy        SavedJob[]
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@unique([source, sourceUrl])
+  @@index([status, postedDate])
+  @@index([location])
+  @@index([workMode])
+  @@index([employmentType])
+}
+
+model Application {
+  id          String            @id @default(cuid())
+  coverLetter String?
+  resumeUrl   String?
+  status      ApplicationStatus @default(APPLIED)
+  candidateId String
+  jobId       String
+  candidate   User              @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  job         Job               @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@unique([candidateId, jobId])
+  @@index([jobId, status])
+}
+
+model SavedJob {
+  id          String   @id @default(cuid())
+  candidateId String
+  jobId       String
+  candidate   User     @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  job         Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+
+  @@unique([candidateId, jobId])
+  @@index([candidateId, createdAt])
+}
