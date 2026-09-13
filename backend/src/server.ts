@@ -5,8 +5,11 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import crypto from "node:crypto";
+import fs from "node:fs";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../generated/prisma/client.ts";
+import multer from "multer";
 
 const app = express();
 const port = Number(process.env.PORT ?? 4000);
@@ -17,6 +20,14 @@ const prisma = new PrismaClient({ adapter });
 type AuthRequest = Request & { user?: { id: string; role: string } };
 app.use(cors({ origin: process.env.FRONTEND_URL || true }));
 app.use(express.json({ limit: "1mb" }));
+const uploadDirectory = path.join(process.cwd(), "uploads", "resumes");
+fs.mkdirSync(uploadDirectory, { recursive: true });
+const resumeUpload = multer({
+  dest: uploadDirectory,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, callback) => callback(null, ["application/pdf", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"].includes(file.mimetype)),
+});
+app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
 function signUser(user: { id: string; role: string }) {
   return jwt.sign({ id: user.id, role: user.role }, jwtSecret, { expiresIn: "7d" });
@@ -73,9 +84,33 @@ app.post("/auth/login", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+app.post("/auth/forgot-password", async (req, res, next) => {
+  try {
+    const email = String(req.body.email ?? "").toLowerCase().trim();
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) return res.json({ message: "If the account exists, reset instructions have been created." });
+    const resetToken = crypto.randomBytes(32).toString("hex");
+    await prisma.user.update({ where: { id: user.id }, data: { resetToken, resetExpires: new Date(Date.now() + 30 * 60 * 1000) } });
+    console.log(`Password reset token for ${email}: ${resetToken}`);
+    res.json({ message: "If the account exists, reset instructions have been created.", resetToken });
+  } catch (error) { next(error); }
+});
+
+app.post("/auth/reset-password", async (req, res, next) => {
+  try {
+    const token = String(req.body.token ?? "");
+    const password = String(req.body.password ?? "");
+    if (password.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters" });
+    const user = await prisma.user.findUnique({ where: { resetToken: token } });
+    if (!user || !user.resetExpires || user.resetExpires < new Date()) return res.status(400).json({ error: "Reset token is invalid or expired" });
+    await prisma.user.update({ where: { id: user.id }, data: { passwordHash: await bcrypt.hash(password, 12), resetToken: null, resetExpires: null } });
+    res.json({ message: "Password reset successfully" });
+  } catch (error) { next(error); }
+});
+
 app.get("/profile", auth, async (req: AuthRequest, res, next) => {
   try {
-    const profile = await prisma.user.findUnique({ where: { id: req.user!.id }, select: { id: true, name: true, email: true, role: true, company: true, createdAt: true } });
+    const profile = await prisma.user.findUnique({ where: { id: req.user!.id }, select: { id: true, name: true, email: true, role: true, resumeUrl: true, company: true, createdAt: true } });
     if (!profile) return res.status(404).json({ error: "Profile not found" });
     res.json(profile);
   } catch (error) { next(error); }
@@ -87,6 +122,15 @@ app.put("/profile", auth, async (req: AuthRequest, res, next) => {
     if (!name) return res.status(400).json({ error: "Name is required" });
     const profile = await prisma.user.update({ where: { id: req.user!.id }, data: { name }, select: { id: true, name: true, email: true, role: true } });
     res.json(profile);
+  } catch (error) { next(error); }
+});
+
+app.post("/profile/resume", auth, roles("CANDIDATE"), resumeUpload.single("resume"), async (req: AuthRequest, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "A PDF, DOC, or DOCX resume is required" });
+    const resumeUrl = `/uploads/resumes/${req.file.filename}`;
+    await prisma.user.update({ where: { id: req.user!.id }, data: { resumeUrl } });
+    res.status(201).json({ resumeUrl });
   } catch (error) { next(error); }
 });
 
@@ -157,7 +201,8 @@ app.delete("/jobs/:id", auth, roles("EMPLOYER", "ADMIN"), async (req: AuthReques
 
 app.post("/jobs/:id/apply", auth, roles("CANDIDATE"), async (req: AuthRequest, res, next) => {
   try {
-    const application = await prisma.application.create({ data: { jobId: req.params.id, candidateId: req.user!.id, coverLetter: req.body.coverLetter, resumeUrl: req.body.resumeUrl } });
+    const candidate = await prisma.user.findUnique({ where: { id: req.user!.id }, select: { resumeUrl: true } });
+    const application = await prisma.application.create({ data: { jobId: req.params.id, candidateId: req.user!.id, coverLetter: req.body.coverLetter, resumeUrl: req.body.resumeUrl ?? candidate?.resumeUrl } });
     res.status(201).json(application);
   } catch (error: any) {
     if (error.code === "P2002") return res.status(409).json({ error: "You have already applied to this job" });
@@ -237,18 +282,16 @@ function mapRemotiveJob(job: any) {
   };
 }
 
-app.post("/scrape/jobs", auth, roles("ADMIN"), async (req, res, next) => {
-  try {
-    const source = String(req.body.source ?? "");
-    let jobs = Array.isArray(req.body.jobs) ? req.body.jobs : [];
-    if (source === "remotive") {
-      const search = req.body.search ? `&search=${encodeURIComponent(String(req.body.search))}` : "";
-      const feedResponse = await fetch(`https://remotive.com/api/remote-jobs?limit=100${search}`);
-      if (!feedResponse.ok) throw new Error(`Remotive returned HTTP ${feedResponse.status}`);
-      const feed = await feedResponse.json() as { jobs?: any[] };
-      jobs = (feed.jobs ?? []).map(mapRemotiveJob);
-    }
-    if (!source || !jobs.length) return res.status(400).json({ error: "source and a non-empty jobs array are required" });
+async function importJobs(source: string, inputJobs: any[] = [], search = "") {
+  let jobs = inputJobs;
+  if (source === "remotive") {
+    const query = search ? `&search=${encodeURIComponent(search)}` : "";
+    const feedResponse = await fetch(`https://remotive.com/api/remote-jobs?limit=100${query}`);
+    if (!feedResponse.ok) throw new Error(`Remotive returned HTTP ${feedResponse.status}`);
+    const feed = await feedResponse.json() as { jobs?: any[] };
+    jobs = (feed.jobs ?? []).map(mapRemotiveJob);
+  }
+  if (!source || !jobs.length) throw new Error("source and a non-empty jobs array are required");
   let jobsAdded = 0;
   let duplicatesSkipped = 0;
   const errors: string[] = [];
@@ -264,9 +307,24 @@ app.post("/scrape/jobs", auth, roles("ADMIN"), async (req, res, next) => {
       else errors.push(`${item.title ?? "unknown job"}: ${error.message}`);
     }
   }
-    res.json({ source, jobsFetched: jobs.length, jobsAdded, duplicatesSkipped, errors });
+  return { source, jobsFetched: jobs.length, jobsAdded, duplicatesSkipped, errors };
+}
+
+app.post("/scrape/jobs", auth, roles("ADMIN"), async (req, res, next) => {
+  try {
+    res.json(await importJobs(String(req.body.source ?? ""), Array.isArray(req.body.jobs) ? req.body.jobs : [], String(req.body.search ?? "")));
   } catch (error) { next(error); }
 });
+
+async function scheduledRemotiveImport() {
+  try {
+    const result = await importJobs("remotive", [], "");
+    console.log(`Scheduled scraper: added ${result.jobsAdded}, skipped ${result.duplicatesSkipped}, errors ${result.errors.length}`);
+  } catch (error) { console.error("Scheduled scraper failed", error); }
+}
+
+const sixHours = 6 * 60 * 60 * 1000;
+setInterval(scheduledRemotiveImport, sixHours);
 
 app.use((error: any, _req: Request, res: Response, _next: NextFunction) => { console.error(error); res.status(500).json({ error: "Internal server error" }); });
 
