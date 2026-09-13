@@ -73,6 +73,23 @@ app.post("/auth/login", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+app.get("/profile", auth, async (req: AuthRequest, res, next) => {
+  try {
+    const profile = await prisma.user.findUnique({ where: { id: req.user!.id }, select: { id: true, name: true, email: true, role: true, company: true, createdAt: true } });
+    if (!profile) return res.status(404).json({ error: "Profile not found" });
+    res.json(profile);
+  } catch (error) { next(error); }
+});
+
+app.put("/profile", auth, async (req: AuthRequest, res, next) => {
+  try {
+    const name = String(req.body.name ?? "").trim();
+    if (!name) return res.status(400).json({ error: "Name is required" });
+    const profile = await prisma.user.update({ where: { id: req.user!.id }, data: { name }, select: { id: true, name: true, email: true, role: true } });
+    res.json(profile);
+  } catch (error) { next(error); }
+});
+
 app.get("/jobs", async (req, res, next) => {
   try {
     const page = Math.max(Number(req.query.page ?? 1), 1);
